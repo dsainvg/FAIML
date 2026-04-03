@@ -4,18 +4,25 @@ Duplicate/build-slide page remover for PDFs.
 For each PDF in Slides/sec1 (recursively):
   - Render each page to an image.
   - Compare the current page with the previous page:
-      * Top region  = first 10% of page height
+      * Top region = first 10% of page height
       * Bottom region = last 5% of page height
     If BOTH regions are pixel-identical between the two pages,
     the *previous* page is considered a build-step duplicate and is removed.
   - Save the cleaned PDF into "Slides/sec1 Processed/<same relative path>".
   - Copy all non-PDF files to the processed folder, preserving structure.
+  - PPT/PPTX files are converted to PDF without processing (no duplicate removal).
+
+Requirements:
+  pip install PyMuPDF comtypes (Windows) or
+  pip install PyMuPDF (with LibreOffice installed for PPT conversion)
+
 """
 
 import argparse
 import os
 import sys
 import shutil
+import subprocess
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -105,6 +112,57 @@ def process_pdf(src_path: Path, dst_path: Path) -> int:
     return len(pages_to_delete)
 
 
+def convert_ppt_to_pdf(src_path: Path, dst_path: Path) -> bool:
+    """Convert PPT/PPTX to PDF using available libraries/tools.
+    Returns True if conversion succeeded.
+    """
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Method 1: Try comtypes on Windows (requires PowerPoint installed)
+    if sys.platform == "win32":
+        powerpoint = None
+        try:
+            import comtypes.client
+            powerpoint = comtypes.client.CreateObject("PowerPoint.Application")
+            deck = powerpoint.Presentations.Open(str(src_path.resolve()))
+            # 32 = ppSaveAsPDF
+            deck.SaveAs(str(dst_path.resolve()), 32)
+            deck.Close()
+            if powerpoint:
+                powerpoint.Quit()
+            return True
+        except ImportError:
+            # comtypes not installed
+            pass
+        except Exception:
+            # PowerPoint not available or other error
+            pass
+        finally:
+            if powerpoint:
+                try:
+                    powerpoint.Quit()
+                except:
+                    pass
+    
+    # Method 2: Try LibreOffice (cross-platform)
+    try:
+        result = subprocess.run(
+            ["soffice", "--headless", "--convert-to", "pdf", 
+             "--outdir", str(dst_path.parent), str(src_path)],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0:
+            pdf_name = src_path.stem + ".pdf"
+            generated_pdf = dst_path.parent / pdf_name
+            if generated_pdf.exists():
+                if generated_pdf != dst_path:
+                    generated_pdf.rename(dst_path)
+                return True
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    
+    return False
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Remove build-step duplicate pages from PDFs."
@@ -126,32 +184,48 @@ def main() -> None:
 
     total_removed = 0
     pdf_count = 0
+    ppt_count = 0
     other_count = 0
 
     for root, _dirs, files in os.walk(SRC_DIR):
         root_path = Path(root)
         rel = root_path.relative_to(SRC_DIR)
-
         for fname in files:
             src_file = root_path / fname
             dst_file = DST_DIR / rel / fname
-
-            if fname.lower().endswith(".pdf"):
+            lower_fname = fname.lower()
+            
+            if lower_fname.endswith(".pdf"):
                 pdf_count += 1
                 print(f"Processing: {rel / fname} ", end="... ", flush=True)
                 removed = process_pdf(src_file, dst_file)
                 total_removed += removed
                 print(f"removed {removed} pages")
+            
+            elif lower_fname.endswith((".ppt", ".pptx")):
+                # Convert PPT/PPTX to PDF without processing
+                ppt_count += 1
+                pdf_dst = dst_file.with_suffix(".pdf")
+                print(f"Converting PPT: {rel / fname} ", end="... ", flush=True)
+                if convert_ppt_to_pdf(src_file, pdf_dst):
+                    print(f"converted to PDF")
+                else:
+                    # Fallback: copy as-is if conversion fails
+                    dst_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_file, dst_file)
+                    print(f"conversion failed, copied as-is")
+            
             else:
-                # Copy non-PDF files as-is
+                # Copy non-PDF/PPT files as-is
                 dst_file.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_file, dst_file)
                 other_count += 1
-                print(f"Copied    : {rel / fname}")
+                print(f"Copied : {rel / fname}")
 
     print()
     print(f"Done — {pdf_count} PDFs processed, "
           f"{total_removed} total duplicate pages removed, "
+          f"{ppt_count} PPT/PPTX converted, "
           f"{other_count} other files copied.")
 
 
