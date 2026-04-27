@@ -1,3 +1,4 @@
+Write-Host "This will download the latest slides from the course website, clean up non-presentation files, and run a duplicate page remover on sec1 slides. If you dont have powerpoint installed, you cannot view the slides, but you can still run the duplicate page remover to get a sense of how it works. Make sure you have Python 3.8+ installed and on your PATH."
 git clone --depth 1 https://github.com/cs21206-iitkgp/cs21206-iitkgp.github.io.git
 $repoDir = "cs21206-iitkgp.github.io"
 $spDir = Get-ChildItem -Path "$repoDir/sp*" -Directory | Select-Object -First 1
